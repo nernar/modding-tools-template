@@ -63,6 +63,9 @@ const displayItemInHandInformation = function() {
 	if (item.extra) {
 		Game.message(item.extra.asJson().toString(4));
 	}
+	closeAllPopups();
+	TextureModeler.reconstructItemModel(item.id, item.data, true);
+	TOOL.unqueue();
 };
 
 Translation.addTranslation("API is empty or declared incorrectly.", {
@@ -196,6 +199,13 @@ const TOOL = new SidebarTool({
 			return item.getTitle();
 		}
 		return translate("Deprecated translation");
+	},
+
+	unqueue: function() {
+		SidebarTool.prototype.unqueue.apply(this, arguments);
+		showBoxMove("texture", { x: 0, y: 0, z: 0 });
+		showBoxScretch("texture", { x: 1, y: 1, z: 1 });
+		showBoxRotate("texture", { px: 0, py: 0, pz: 0, rx: 0, ry: 0, rz: 0 });
 	}
 });
 
@@ -256,3 +266,147 @@ Callback.addCallback("LevelLeft", function() {
 		});
 	}
 });
+
+const attachSingleCoordinateGroup = function(coordinate, fragment, instance, when, modifiers) {
+	let group = fragment.addAxisGroup(translate(coordinate));
+	group.addCounter(instance[coordinate] || 0, function(value) {
+		instance[coordinate] = value;
+		when && when(coordinate, value);
+	}, modifiers || [16, 32, 1], 0).setOnResetListener(function() {
+		return 0;
+	});
+	return group;
+};
+
+const attachFixedMultiCoordinateGroup = function(coordinate, fragment, instance, when, count, modifiers) {
+	let group = fragment.addAxisGroup(translate(coordinate));
+	for (let i = 1; i <= count; i++) {
+		let position = i;
+		group.addCounter(instance[coordinate + i] || 0, function(value) {
+			instance[coordinate + position] = value;
+			when && when(coordinate + position, value);
+		}, modifiers || [16, 32, 1], 0).setOnResetListener(function() {
+			return 0;
+		});
+	}
+	return group;
+};
+
+const attachMultiCoordinateGroup = function(coordinate, fragment, instance, when, count, modifiers) {
+	if (count !== undefined) {
+		return attachFixedMultiCoordinateGroup(coordinate, fragment, instance, when, count, modifiers);
+	}
+	let index = 0;
+	while (instance[coordinate + (index + 1)] !== undefined) {
+		index++;
+	}
+	return attachFixedMultiCoordinateGroup(coordinate, fragment, instance, when, index, modifiers);
+};
+
+const attachCoordinateGroup = function(coordinate, fragment, instance, when, modifiers) {
+	if (instance[coordinate] !== undefined) {
+		return attachSingleCoordinateGroup(coordinate, fragment, instance, when, modifiers);
+	} else if (instance[coordinate + 1] !== undefined) {
+		return attachMultiCoordinateGroup(coordinate, fragment, instance, when, modifiers);
+	}
+	return null;
+};
+
+const buildScretchPopup = function(instance, when, name) {
+	let popup = new ExpandablePopup();
+	popup.setTitle(translate(name || "Scretch"));
+	let fragment = popup.getFragment();
+	attachCoordinateGroup("x", fragment, instance, when);
+	attachCoordinateGroup("y", fragment, instance, when);
+	attachCoordinateGroup("z", fragment, instance, when);
+	return popup;
+};
+
+const showBoxScretch = function(identifier, scretch) {
+	if (hasOpenedPopup(identifier + "_box_scretch")) {
+		return closePopup(identifier + "_box_scretch");
+	}
+	let lastScretch = clone(scretch);
+	let popup = buildScretchPopup(scretch, function(coordinate, value) {
+		if (lastMesh) lastMesh.scale(1 + scretch.x - lastScretch.x, 1 + scretch.y - lastScretch.y, 1 + scretch.z - lastScretch.z);
+		if (lastItemModel) lastItemModel.setHandModel(lastMesh, lastItemModel.getMeshTextureName());
+		lastScretch = clone(scretch);
+	});
+	popup.setIsMayDismissed(false);
+	return popup.show(identifier + "_box_scretch");
+};
+
+const showBoxMove = function(identifier, move) {
+	if (hasOpenedPopup(identifier + "_box_move")) {
+		return closePopup(identifier + "_box_move");
+	}
+	let lastMove = clone(move);
+	let popup = buildScretchPopup(move, function(coordinate, value) {
+		if (lastMesh) lastMesh.translate(move.x - lastMove.x, move.y - lastMove.y, move.z - lastMove.z);
+		if (lastItemModel) lastItemModel.setHandModel(lastMesh, lastItemModel.getMeshTextureName());
+		lastMove = clone(move);
+	}, "Move");
+	popup.setIsMayDismissed(false);
+	return popup.show(identifier + "_box_move");
+};
+
+const getHumanReadableName = function(index, instance) {
+	if (instance[index] == null || typeof instance[index] != "object") {
+		return instance[index];
+	}
+	return index + ". " + (instance[index].x2 - instance[index].x1) +
+		"x" + (instance[index].y2 - instance[index].y1) +
+		"x" + (instance[index].z2 - instance[index].z1);
+};
+
+const attachSingleSelectorLayout = function(fragment, instance, when, selected, params) {
+	let fragments = [];
+	for (let i = 0; i < instance.length; i++) {
+		let index = i;
+		let button = new SolidButtonFragment();
+		button.setText(getHumanReadableName(i, instance));
+		button.setOnClickListener(function() {
+			if (index != selected) {
+				if (selected !== undefined && selected != -1) {
+					fragments[selected].setBackground(null);
+				}
+				button.setBackground("popupSelectionSelected");
+				selected = index;
+			}
+			when && when(index);
+		});
+		fragment.addElementFragment(button, params);
+		if (i == selected) {
+			button.setBackground("popupSelectionSelected");
+		}
+		fragments.push(button);
+	}
+	return fragments;
+};
+
+const buildRotatePopup = function(instance, when) {
+	let popup = new ExpandablePopup();
+	popup.setTitle(translate("Rotate"));
+	let fragment = popup.getFragment();
+	attachCoordinateGroup("px", fragment, instance);
+	attachCoordinateGroup("py", fragment, instance);
+	attachCoordinateGroup("pz", fragment, instance);
+	attachCoordinateGroup("rx", fragment, instance, when, [1, 10]);
+	attachCoordinateGroup("ry", fragment, instance, when, [1, 10]);
+	attachCoordinateGroup("rz", fragment, instance, when, [1, 10]);
+	return popup;
+};
+
+const showBoxRotate = function(identifier, rotate) {
+	if (hasOpenedPopup(identifier + "_box_rotate")) {
+		return closePopup(identifier + "_box_rotate");
+	}
+	let lastRotate = clone(rotate);
+	let popup = buildRotatePopup(rotate, function(coordinate, value) {
+		if (lastMesh) lastMesh.rotate(rotate.px, rotate.py, rotate.pz, (rotate.rx - lastRotate.rx) * Math.PI / 180, (rotate.ry - lastRotate.ry) * Math.PI / 180, (rotate.rz - lastRotate.rz) * Math.PI / 180);
+		if (lastItemModel) lastItemModel.setHandModel(lastMesh, lastItemModel.getMeshTextureName());
+		lastRotate = clone(rotate);
+	});
+	popup.setIsMayDismissed(false);
+	return popup.show(identifier + "_box_rotate");
+};
